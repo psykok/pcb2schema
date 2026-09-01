@@ -3,23 +3,23 @@
     "name": "PCB to Schematic",
     "description": "Generate a schematic from an existing PCB layout.",
     "description_full": "Inverts KiCad's usual design flow. Lay out a PCB by dropping footprints and drawing tracks, then let this plugin populate the project's schematic: it matches each footprint to a library symbol, recovers the netlist from the board geometry, places the symbols and routes the connections as orthogonal wires. References are annotated back into the PCB and linked to the generated symbols so 'Update PCB from Schematic' keeps working afterwards. Re-running syncs incrementally and preserves manual schematic edits.",
-    "identifier": "com.github.kachlera.pcb2schema",
+    "identifier": "com.github.psykok.pcb2schema",
     "type": "plugin",
     "author": {
         "name": "Alexandre Kachler",
         "contact": {
-            "web": "https://github.com/kachlera/pcb2schema"
+            "web": "https://github.com/psykok/pcb2schema"
         }
     },
     "maintainer": {
         "name": "Alexandre Kachler",
         "contact": {
-            "web": "https://github.com/kachlera/pcb2schema"
+            "web": "https://github.com/psykok/pcb2schema"
         }
     },
     "license": "MIT",
     "resources": {
-        "homepage": "https://github.com/kachlera/pcb2schema"
+        "homepage": "https://github.com/psykok/pcb2schema"
     },
     "keep_on_update": [
         "^symbol-cache\\.json$"
