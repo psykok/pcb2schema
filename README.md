@@ -26,12 +26,25 @@ rebuilds the netlist from what is physically touching what.
 
 ```sh
 python3 tools/build_pcm.py            # -> dist/pcb2schema-<version>.zip
-python3 tools/build_pcm.py --install  # or unpack straight into KiCad
 ```
 
-For the packaged route, use **Plugin and Content Manager → Install from File…** and
-pick the zip. Then restart pcbnew, or use *Tools → External Plugins → Refresh
-Plugins*.
+Then **Plugin and Content Manager → Install from File…** and pick the zip. Restart
+pcbnew, or use *Tools → External Plugins → Refresh Plugins*.
+
+This is the route to use. PCM reads `metadata.json` out of the archive as it installs
+and records the result in `installed_packages.json`; it never reads it back from the
+installed directory. So a package only has an author, description and version if PCM
+put it there.
+
+For development there is also
+
+```sh
+python3 tools/build_pcm.py --install  # copy straight into the plugin folder
+```
+
+which gets the code under the toolbar button without going through PCM. The trade-off
+is that PCM has no record of it, so it appears in the package list with a blank author
+and version 0.0. That listing is cosmetic -- the plugin itself works either way.
 
 The installed layout matters and is easy to get wrong: KiCad imports each directory
 under `<KICAD_3RD_PARTY>/plugins/` *as a Python module*, and skips any that has no

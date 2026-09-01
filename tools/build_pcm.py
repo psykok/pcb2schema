@@ -85,6 +85,16 @@ PACKAGE_DIR = "pcb2schema"  # must be a valid Python identifier: KiCad imports i
 def install(archive, version_dir=None):
     """Unpack into KiCad's 3rdparty plugin folder, bypassing PCM.
 
+    This is a *developer* shortcut. It gets the code running under the toolbar
+    button, but it cannot register the package with the Plugin and Content Manager:
+    PCM reads ``metadata.json`` out of the archive as it installs and records the
+    result in ``installed_packages.json``. It never reads it back from the installed
+    directory. A hand-copied plugin is therefore an unknown directory to PCM, which
+    lists it with a blank author, no description and version 0.0.
+
+    To see real package metadata, install the zip through
+    *Plugin and Content Manager -> Install from File...* instead.
+
     The layout matters and is easy to get wrong. KiCad's loader walks
     ``<KICAD_3RD_PARTY>/plugins/``, and for each *directory* it imports the directory
     itself as a Python module -- but only if that directory contains ``__init__.py``
@@ -122,12 +132,16 @@ def install(archive, version_dir=None):
             if member.endswith("/"):
                 continue
             parts = member.split("/")
-            if parts[0] == "plugins":
+            if member == "metadata.json":
+                # Not read by KiCad from here, but harmless and makes the installed
+                # tree self-describing for anything else that looks.
+                dest = os.path.join(plugin_dir, "metadata.json")
+            elif parts[0] == "plugins":
                 dest = os.path.join(plugin_dir, *parts[1:])
             elif parts[0] == "resources":
                 dest = os.path.join(resource_dir, *parts[1:])
             else:
-                continue  # metadata.json is PCM bookkeeping, not runtime content
+                continue
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with zf.open(member) as src, open(dest, "wb") as out:
                 shutil.copyfileobj(src, out)
@@ -136,6 +150,10 @@ def install(archive, version_dir=None):
     if not os.path.isfile(marker):
         sys.exit("install produced no %s -- KiCad would skip the plugin" % marker)
     print("installed to %s" % plugin_dir)
+    print("note: PCM will list this with a blank author -- a hand-copied plugin is "
+          "not a registered package.\n"
+          "      For real metadata use PCM -> Install from File... with %s"
+          % os.path.basename(archive))
 
 
 def main():
