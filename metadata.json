@@ -6,13 +6,13 @@
     "identifier": "com.github.psykok.pcb2schema",
     "type": "plugin",
     "author": {
-        "name": "Alexandre Kachler",
+        "name": "psykok",
         "contact": {
             "web": "https://github.com/psykok/pcb2schema"
         }
     },
     "maintainer": {
-        "name": "Alexandre Kachler",
+        "name": "psykok",
         "contact": {
             "web": "https://github.com/psykok/pcb2schema"
         }
