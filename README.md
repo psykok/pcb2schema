@@ -99,6 +99,23 @@ changed: parts added, parts deleted, and footprints swapped for a different one.
 Wiring against a stale sheet would otherwise produce a schematic that quietly
 disagrees with the PCB.
 
+### Re-running keeps what you have arranged
+
+Symbol positions survive a re-run, and so does wiring. A net is redrawn only when
+something about it actually changed — its name, its set of pins, or where those pins
+sit. Everything else is left exactly as you arranged it, including routes you dragged
+into shape by hand.
+
+Move one symbol and only the nets touching it are redrawn; the rest of the sheet is
+untouched. The run reports which is which:
+
+```
+Updated board.kicad_sch | 12 symbols, 10 nets, 8 net(s) left untouched
+```
+
+If part of a net's wiring has been deleted, that net is redrawn rather than left half
+wired.
+
 ### Everything must be tagged first
 
 A conversion is only as good as the identifiers it starts from. If footprints are

@@ -55,6 +55,9 @@ class ConversionResult(object):
         self.auto_tagged_nets = []
         self.auto_tagged_components = []
         self.stage = STAGE_ALL
+        self.routing_by_net = {}   # net name -> {"signature":..., "uuids":[...]}
+        self.reused_nets = []      # nets left exactly as the user arranged them
+        self.rerouted_nets = []    # nets redrawn because something about them moved
 
     def summary(self):
         if self.blocked:
@@ -70,6 +73,8 @@ class ConversionResult(object):
             parts.append("%d net(s) auto-tagged" % len(self.auto_tagged_nets))
         if self.unresolved:
             parts.append("%d unresolved footprint(s)" % len(self.unresolved))
+        if self.reused_nets:
+            parts.append("%d net(s) left untouched" % len(self.reused_nets))
         if self.bus_nets:
             parts.append("%d power/bus net(s) labelled" % len(self.bus_nets))
         if self.labelled_nets:
@@ -93,6 +98,17 @@ def default_resolver(info, candidates, forced=False):
 _CHAR_WIDTH = 1.27 * 0.85
 _TEXT_HEIGHT = 1.27 * 2.0
 _BODY_PAD = 2.0
+
+
+def _net_signature(name, pin_points):
+    """What a net's wiring depends on: its name, its pins, and where they sit.
+
+    If none of that changed, the wires drawn last time are still correct and are left
+    alone -- including any rerouting the user did by hand. Moving a symbol changes its
+    pin positions and so redraws exactly the nets that touch it, and nothing else.
+    """
+    parts = ["%s|%.2f|%.2f" % (key, pt[0], pt[1]) for key, pt in sorted(pin_points)]
+    return "%s::%s" % (name, ";".join(parts))
 
 
 def _label_obstacles(placeables, result):
@@ -365,13 +381,20 @@ def convert(board, project_name="", project_dir=None, resolver=None,
     step("Writing symbols")
     if existing is not None:
         doc = existing
-        # Strip only what we generated last time. Items the user added carry UUIDs we
-        # never recorded, so they are invisible to this and survive the update.
-        # A symbols-only run must not tear out wiring it is not going to replace.
-        for uuid in (list(sync_state.routing) if (sync_state and wire_it_up) else []):
-            doc.remove_by_uuid(uuid)
+        # Only remove symbols we own that are *not* about to be written again --
+        # a footprint deleted from the board. The rest are overwritten in place, which
+        # keeps document order and so keeps a no-op re-run byte-identical. Items the
+        # user added carry uuids we never recorded and are invisible to this.
+        # Wiring is handled per net further down.
+        keep = set()
+        for info, _cand in chosen:
+            if info.uuid in defs:
+                for pl in placeables:
+                    if pl.key[0] == info.uuid:
+                        keep.add(schematic.derive_uuid("symbol", info.uuid, pl.unit))
         for uuid in sorted(sync_state.owned_symbol_uuids()) if sync_state else []:
-            doc.remove_by_uuid(uuid)
+            if uuid not in keep:
+                doc.remove_by_uuid(uuid)
     else:
         doc = schematic.Schematic(project_name=project_name)
     doc.set_paper(paper)
@@ -450,8 +473,49 @@ def convert(board, project_name="", project_dir=None, resolver=None,
     for key, pt in pin_pos.items():
         router.reserve_pin(pt, pin_escape.get(key))
 
+    # Decide, per net, whether last run's wiring is still valid. A net whose name,
+    # pins and pin positions are all unchanged keeps the wires it already has --
+    # including any rerouting the user did by hand. Redrawing every net on every run
+    # throws that work away for no reason.
+    signatures = {}
+    for net in result.nets:
+        points = [((p.fp_uuid, p.number), pin_pos[(p.fp_uuid, p.number)])
+                  for p in net.pads if (p.fp_uuid, p.number) in pin_pos]
+        signatures[net.name] = _net_signature(net.name, points)
+
+    reusable = {}
+    if existing is not None and sync_state is not None:
+        for net in result.nets:
+            if sync_state.net_signature(net.name) != signatures[net.name]:
+                continue
+            uuids = sync_state.net_uuids(net.name)
+            # Only reuse if every item we drew for it is still in the sheet; if the
+            # user deleted some of it, redraw the net rather than leave it half wired.
+            if uuids and all(doc.node_by_uuid(u) is not None for u in uuids):
+                reusable[net.name] = uuids
+
+    # Anything not being reused is ours to remove and redraw.
+    for net_name, entry in (sync_state.nets.items() if sync_state else {}.items()):
+        if net_name in reusable:
+            continue
+        for uuid in entry.get("uuids", ()):
+            doc.remove_by_uuid(uuid)
+    for uuid in (sync_state.routing if sync_state else ()):
+        if not any(uuid in u for u in reusable.values()):
+            doc.remove_by_uuid(uuid)
+
+    # Kept wiring still occupies the sheet, so the router must route around it.
+    for net_name, uuids in reusable.items():
+        router.reserve_existing(net_name, doc.wire_segments(uuids))
+        result.routing_by_net[net_name] = {
+            "signature": signatures[net_name], "uuids": list(uuids)}
+        result.reused_nets.append(net_name)
+        result.generated_routing.extend(uuids)
+
     routable, unplaced, high_fanout = [], [], []
     for net in result.nets:
+        if net.name in reusable:
+            continue
         pts = [pin_pos[(p.fp_uuid, p.number)] for p in net.pads
                if (p.fp_uuid, p.number) in pin_pos]
         if len(pts) > MAX_ROUTED_FANOUT:
@@ -460,12 +524,24 @@ def convert(board, project_name="", project_dir=None, resolver=None,
             routable.append((net.name, pts))
         elif len(pts) == 1:
             unplaced.append((net.name, pts))
+    result.rerouted_nets = sorted(
+        n.name for n in result.nets if n.name not in reusable)
 
     routed = router.route_nets(routable)
-    for (a, b) in routed.segments:
-        result.generated_routing.append(doc.add_wire(a, b).value("uuid"))
-    for pt in routed.junctions:
-        result.generated_routing.append(doc.add_junction(pt).value("uuid"))
+
+    def _own(net_name, uuid):
+        """Attribute a drawn item to its net, so a later run can reuse or replace it."""
+        entry = result.routing_by_net.setdefault(
+            net_name, {"signature": signatures.get(net_name, ""), "uuids": []})
+        entry["uuids"].append(uuid)
+        result.generated_routing.append(uuid)
+
+    for net_name, segs in sorted(routed.by_net.items()):
+        for (a, b) in segs:
+            _own(net_name, doc.add_wire(a, b, net_name).value("uuid"))
+    for net_name, pts in sorted(routed.junctions_by_net.items()):
+        for pt in pts:
+            _own(net_name, doc.add_junction(pt, net_name).value("uuid"))
 
     # -- 9a. keep the board's own net names ---------------------------------
     # A wire carries no name; only a label does. If the board names a net, that name
@@ -486,9 +562,8 @@ def convert(board, project_name="", project_dir=None, resolver=None,
         anchor, rotation = _label_anchor(segments, obstacles)
         if anchor is None:
             continue
-        result.generated_routing.append(
-            doc.add_label(net_name, anchor, rotation, scope="global").value("uuid")
-        )
+        _own(net_name, doc.add_label(net_name, anchor, rotation,
+                                     scope="global").value("uuid"))
         result.preserved_net_names.append(net_name)
 
     # -- 9b. label fallback -------------------------------------------------
@@ -499,20 +574,18 @@ def convert(board, project_name="", project_dir=None, resolver=None,
         if name in failed:
             result.labelled_nets.append(name)
             for pt in pts:
-                result.generated_routing.append(doc.add_label(name, pt).value("uuid"))
+                _own(name, doc.add_label(name, pt, scope="global").value("uuid"))
     # Power and ground: a label on every pin, as a person would draw it.
     for name, pts in high_fanout:
         result.bus_nets.append(name)
         for pt in pts:
-            result.generated_routing.append(
-                doc.add_label(name, pt, scope="global").value("uuid"))
+            _own(name, doc.add_label(name, pt, scope="global").value("uuid"))
 
     for name, pts in unplaced:
         # Single-pad named nets (connector pins) are labels by nature.
         result.labelled_nets.append(name)
         for pt in pts:
-            result.generated_routing.append(
-                doc.add_label(name, pt, scope="global").value("uuid"))
+            _own(name, doc.add_label(name, pt, scope="global").value("uuid"))
 
     result.schematic = doc
     step("Done")

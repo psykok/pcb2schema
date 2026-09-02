@@ -35,9 +35,13 @@ _MAX_EXPANSIONS = 120000
 
 
 class RouteResult(object):
-    __slots__ = ("segments", "junctions", "failed", "by_net")
+    __slots__ = ("segments", "junctions", "failed", "by_net", "junctions_by_net")
 
-    def __init__(self, segments, junctions, failed, by_net=None):
+    def __init__(self, segments, junctions, failed, by_net=None,
+                 junctions_by_net=None):
+        # Per-net attribution lets the caller record which items belong to which net,
+        # so an unchanged net can keep exactly its own wiring on the next run.
+        self.junctions_by_net = junctions_by_net or {}
         # segments: list of ((x1, y1), (x2, y2)) in millimetres
         self.segments = segments
         self.junctions = junctions
@@ -122,6 +126,20 @@ class Router(object):
                         a[1] + int(round(dy * i / float(steps)))))
         return out
 
+    def reserve_existing(self, net_name, segments):
+        """Register wiring that is being kept rather than redrawn.
+
+        Nets whose connections have not changed keep the wires they already have, so
+        the router has to know those wires are there: it must not run a different net
+        along the same segment, which would merge the two.
+        """
+        for (p1, p2) in segments:
+            a, b = self.cell(p1), self.cell(p2)
+            for cell in self._line_cells(a, b):
+                self.occupied.setdefault(cell, net_name)
+            for u, v in zip(self._line_cells(a, b), self._line_cells(a, b)[1:]):
+                self.used_edges.setdefault(self._edge_key(u, v), net_name)
+
     # -- routing ------------------------------------------------------------
 
     def route_nets(self, nets):
@@ -135,6 +153,7 @@ class Router(object):
         junction_pts = set()
         failed = []
         by_net = {}
+        junctions_by_net = {}
 
         def spread(item):
             pts = item[1]
@@ -171,13 +190,16 @@ class Router(object):
             merged = self._merge(edges, split_cells=set(cells))
             segments.extend(merged)
             by_net[net_name] = [(self.mm(a), self.mm(b)) for a, b in merged]
-            junction_pts.update(self._junctions(edges, cells))
+            mine = self._junctions(edges, cells)
+            junction_pts.update(mine)
+            junctions_by_net[net_name] = [self.mm(c) for c in sorted(mine)]
 
         return RouteResult(
             segments=[(self.mm(a), self.mm(b)) for a, b in segments],
             junctions=[self.mm(c) for c in sorted(junction_pts)],
             failed=failed,
             by_net=by_net,
+            junctions_by_net=junctions_by_net,
         )
 
     def _route_one(self, net_name, cells):

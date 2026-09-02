@@ -177,7 +177,7 @@ class Schematic(object):
             ]),
         ]))
 
-        self._insert_before_tail(node)
+        self._place(node)
         return node
 
     def add_wire(self, p1, p2, net_name=""):
@@ -189,7 +189,7 @@ class Schematic(object):
             Node("stroke", [Node("width", [num(0)]), Node("type", [Sym("default")])]),
             Node("uuid", [derive_uuid("wire", net_name, p1, p2)]),
         ])
-        self._insert_before_tail(node)
+        self._place(node)
         return node
 
     def add_junction(self, pt, net_name=""):
@@ -199,7 +199,7 @@ class Schematic(object):
             Node("color", [num(0), num(0), num(0), num(0)]),
             Node("uuid", [derive_uuid("junction", net_name, pt)]),
         ])
-        self._insert_before_tail(node)
+        self._place(node)
         return node
 
     def add_label(self, text, pt, rotation=0, justify="left bottom", scope="local"):
@@ -218,7 +218,7 @@ class Schematic(object):
                 _effects(justify="left"),
                 Node("uuid", [derive_uuid("label", text, pt)]),
             ])
-            self._insert_before_tail(node)
+            self._place(node)
             return node
         node = Node("label", [
             text,
@@ -226,7 +226,7 @@ class Schematic(object):
             _effects(justify=justify),
             Node("uuid", [derive_uuid("label", text, pt)]),
         ])
-        self._insert_before_tail(node)
+        self._place(node)
         return node
 
     def add_no_connect(self, pt):
@@ -234,7 +234,7 @@ class Schematic(object):
             Node("at", [num(pt[0]), num(pt[1])]),
             Node("uuid", [derive_uuid("noconnect", pt)]),
         ])
-        self._insert_before_tail(node)
+        self._place(node)
         return node
 
     # -- queries and edits --------------------------------------------------
@@ -256,6 +256,30 @@ class Schematic(object):
                 return True
         return False
 
+    def node_by_uuid(self, uuid):
+        for child in self.root.nodes():
+            if child.value("uuid") == uuid:
+                return child
+        return None
+
+    def wire_segments(self, uuids):
+        """Endpoints of the wires among *uuids*, as ``((x1,y1),(x2,y2))`` in mm."""
+        wanted = set(uuids)
+        out = []
+        for child in self.root.nodes("wire"):
+            if child.value("uuid") not in wanted:
+                continue
+            pts = child.node("pts")
+            if pts is None:
+                continue
+            xy = list(pts.nodes("xy"))
+            if len(xy) < 2:
+                continue
+            a, b = xy[0].atoms(), xy[1].atoms()
+            out.append(((float(str(a[0])), float(str(a[1]))),
+                        (float(str(b[0])), float(str(b[1])))))
+        return out
+
     def item_uuids(self, *names):
         out = {}
         for child in self.root.nodes():
@@ -265,6 +289,23 @@ class Schematic(object):
             if u:
                 out[u] = child
         return out
+
+    def _place(self, node):
+        """Write *node* over any existing item with the same uuid, else append it.
+
+        Regenerating an item in place rather than removing and re-appending keeps the
+        file byte-stable across runs. Identifiers are derived, so a regenerated symbol
+        has the uuid it had last time; appending it instead would shuffle document
+        order on every run and make a no-op re-run look like a change.
+        """
+        uuid = node.value("uuid")
+        if uuid:
+            for i, child in enumerate(self.root.children):
+                if isinstance(child, Node) and child.value("uuid") == uuid:
+                    self.root.children[i] = node
+                    return node
+        self._insert_before_tail(node)
+        return node
 
     def _insert_before_tail(self, node):
         """Insert before ``sheet_instances``/``embedded_fonts``, which KiCad keeps last."""

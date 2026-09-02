@@ -30,8 +30,12 @@ class SyncState(object):
         data = data or {}
         # footprint uuid -> {"symbol": lib_id, "units": {unit: symbol uuid}}
         self.components = data.get("components", {})
-        # UUIDs of wires/junctions/labels we drew
+        # UUIDs of wires/junctions/labels we drew, flat, for ownership checks.
         self.routing = set(data.get("routing", []))
+        # net name -> {"signature": str, "uuids": [...]}. Wiring is kept per net so a
+        # re-run can leave untouched nets exactly as the user arranged them and only
+        # redraw the ones whose connections or pin positions actually moved.
+        self.nets = dict(data.get("nets", {}))
         # footprint lib_id -> symbol lib_id, so a choice is only ever asked once
         self.symbol_choices = data.get("symbol_choices", {})
         self.paper = data.get("paper", "")
@@ -59,6 +63,7 @@ class SyncState(object):
             "paper": self.paper,
             "components": self.components,
             "routing": sorted(self.routing),
+            "nets": self.nets,
             "symbol_choices": self.symbol_choices,
         }
         tmp = path + ".tmp"
@@ -108,3 +113,14 @@ class SyncState(object):
 
     def set_routing(self, uuids):
         self.routing = set(uuids)
+
+    def set_nets(self, by_net):
+        """*by_net* maps net name to ``{"signature": ..., "uuids": [...]}``."""
+        self.nets = by_net
+        self.routing = set(u for entry in by_net.values() for u in entry["uuids"])
+
+    def net_signature(self, name):
+        return self.nets.get(name, {}).get("signature")
+
+    def net_uuids(self, name):
+        return list(self.nets.get(name, {}).get("uuids", ()))

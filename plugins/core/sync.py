@@ -161,7 +161,7 @@ def sync_project(board, pcb_path, resolver=None, index=None, progress=None,
     # A symbols-only run generated no wiring, so leave the record of what it drew
     # last time intact -- otherwise those wires become unowned and are never cleaned.
     if stage != convert.STAGE_SYMBOLS:
-        sync_state.set_routing(result.generated_routing)
+        sync_state.set_nets(result.routing_by_net)
     sync_state.paper = result.paper
     for info, symdef, _ref, _map in result.symbols:
         sync_state.record_choice(info.lib_id, symdef.lib_id)
