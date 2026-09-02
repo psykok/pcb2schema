@@ -39,6 +39,10 @@ def main():
     ap.add_argument("--auto-tag", action="store_true",
                     help="auto-increment references and net names that are missing "
                          "(never renames anything already named)")
+    ap.add_argument("--stage", choices=("all", "symbols", "nets"), default="all",
+                    help="'symbols' places parts without wiring them, so you can "
+                         "arrange the sheet first; 'nets' then wires it up, keeping "
+                         "wherever you put things")
     ap.add_argument("--dry-run", action="store_true", help="report without writing")
     ap.add_argument("--no-pcb", action="store_true",
                     help="write the schematic but leave the board untouched")
@@ -85,6 +89,7 @@ def main():
         board, args.board, resolver=resolver, index=index,
         progress=note, write_pcb=not args.no_pcb, dry_run=args.dry_run,
         tag_policy=preflight.AUTO if args.auto_tag else preflight.REQUIRE,
+        stage=args.stage,
     )
 
     if outcome.blocked:
@@ -100,13 +105,19 @@ def main():
 
     result = outcome.result
     print("\n%s" % outcome.summary())
+    if outcome.drift.any:
+        print("Board has changed since the last run:")
+        for line in outcome.drift.describe().splitlines():
+            print("  %s" % line)
     print("Board: %s" % outcome.report.summary())
     for info, symdef, ref, _pin_map in result.symbols:
         print("  %-6s %-34s <- %s" % (ref, symdef.lib_id, info.lib_id))
-    for net in result.nets:
-        members = ", ".join("%s.%s" % (result.reference_map.get(p.fp_uuid, "?"), p.number)
-                            for p in net.pads)
-        print("  net %-10s %s" % (net.name, members))
+    if result.stage != sync.STAGE_SYMBOLS:
+        for net in result.nets:
+            members = ", ".join(
+                "%s.%s" % (result.reference_map.get(p.fp_uuid, "?"), p.number)
+                for p in net.pads)
+            print("  net %-10s %s" % (net.name, members))
     for info in result.unresolved:
         print("  UNRESOLVED  %s (pads: %s)" % (info.lib_id, ",".join(info.pads)))
     for warning in result.warnings:

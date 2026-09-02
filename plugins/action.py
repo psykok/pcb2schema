@@ -69,6 +69,10 @@ class Pcb2SchemaAction(pcbnew.ActionPlugin):
             )
             return
 
+        stage = self._ask_stage()
+        if stage is None:
+            return
+
         known = sync_state.SyncState.load(
             sync_state.state_path(project_dir, stem)).symbol_choices
         untracked = (os.path.isfile(sch_path) and os.path.getsize(sch_path) > 0
@@ -119,7 +123,7 @@ class Pcb2SchemaAction(pcbnew.ActionPlugin):
             # so the tagging question can be asked before any decision is acted on.
             probe = sync.sync_project(
                 board, pcb_path, resolver=resolver, index=index, progress=report,
-                dry_run=True, tag_policy=preflight.REQUIRE,
+                dry_run=True, tag_policy=preflight.REQUIRE, stage=stage,
             )
             if ui["cancelled"]:
                 return
@@ -134,7 +138,7 @@ class Pcb2SchemaAction(pcbnew.ActionPlugin):
 
             outcome = sync.sync_project(
                 board, pcb_path, resolver=resolver, index=index, progress=report,
-                tag_policy=policy,
+                tag_policy=policy, stage=stage,
             )
             if ui["cancelled"]:
                 return
@@ -146,6 +150,36 @@ class Pcb2SchemaAction(pcbnew.ActionPlugin):
         self._show_summary(outcome)
 
     # -- dialogs ------------------------------------------------------------
+
+    _STAGES = (
+        ("Symbols and nets", sync.STAGE_ALL,
+         "Place every part and wire it up in one pass."),
+        ("Symbols only", sync.STAGE_SYMBOLS,
+         "Place the parts and stop, so you can arrange the sheet yourself first. "
+         "Existing wiring is left alone."),
+        ("Nets only", sync.STAGE_NETS,
+         "Wire up the sheet, keeping the parts exactly where you put them."),
+    )
+
+    @classmethod
+    def _ask_stage(cls):
+        """Let the user split the conversion into arrange-then-wire.
+
+        The grid placement is deliberately mechanical, and on anything but a small
+        board a person will want to lay the sheet out themselves. Splitting the run
+        means the router works with their arrangement instead of one they are about
+        to throw away.
+        """
+        choices = ["%s -- %s" % (label, blurb) for label, _stage, blurb in cls._STAGES]
+        dlg = wx.SingleChoiceDialog(
+            None, "What should this run do?", "PCB to Schematic", choices)
+        dlg.SetSelection(0)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return None
+            return cls._STAGES[dlg.GetSelection()][1]
+        finally:
+            dlg.Destroy()
 
     @staticmethod
     def _ask_tagging(issues):
@@ -209,6 +243,9 @@ class Pcb2SchemaAction(pcbnew.ActionPlugin):
             "",
             "Board updated: %s" % outcome.report.summary(),
         ]
+        if outcome.drift.any:
+            lines += ["", "The board changed since the last run:"]
+            lines += ["  " + l for l in outcome.drift.describe().splitlines()]
         if result.labelled_nets:
             lines += ["", "Routed as net labels instead of wires (no clear path):",
                       "  " + ", ".join(sorted(result.labelled_nets)[:12])]

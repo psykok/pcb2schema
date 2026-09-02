@@ -73,6 +73,32 @@ a legal Python identifier — the dotted reverse-DNS identifier cannot be used h
 
 Both files are backed up with a timestamp before anything is written.
 
+### Two-step: arrange, then wire
+
+The automatic placement is a grid. It echoes the board so the sheet is navigable, but
+on any real design you will want to lay it out yourself — and the router should work
+with *your* arrangement, not one you are about to discard. So the run can be split:
+
+1. **Symbols only** — places every part and stops. Any existing wiring is left alone.
+2. *Arrange the sheet in the schematic editor.*
+3. **Nets only** — wires it up, keeping every symbol exactly where you put it.
+
+The plugin asks which to do on each run; **Symbols and nets** does both in one pass and
+is the default. From the command line:
+
+```sh
+tools/run_headless.py board.kicad_pcb --stage symbols   # place, then go arrange
+tools/run_headless.py board.kicad_pcb --stage nets      # wire up your arrangement
+```
+
+Splitting the run changes only where things sit — the resulting netlist is identical
+either way, which is asserted by a test.
+
+Between the two steps the board may have moved on, so the second step reports what
+changed: parts added, parts deleted, and footprints swapped for a different one.
+Wiring against a stale sheet would otherwise produce a schematic that quietly
+disagrees with the PCB.
+
 ### Everything must be tagged first
 
 A conversion is only as good as the identifiers it starts from. If footprints are

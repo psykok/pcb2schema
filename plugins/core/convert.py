@@ -15,7 +15,16 @@ import os
 from . import (matcher, netlist, place, preflight, route, schematic,
                symbody, symlib)
 
-__all__ = ["ConversionResult", "convert", "default_resolver", "MAX_ROUTED_FANOUT"]
+__all__ = ["ConversionResult", "convert", "default_resolver", "MAX_ROUTED_FANOUT",
+           "STAGE_SYMBOLS", "STAGE_NETS", "STAGE_ALL"]
+
+# The conversion can be taken in two steps. Placing symbols and routing them are
+# separate concerns, and the placement a person wants is rarely the grid one: doing
+# symbols first lets them arrange the sheet by hand, then wire it up against that
+# arrangement instead of fighting a layout the router already committed to.
+STAGE_SYMBOLS = "symbols"   # place symbols, leave any existing wiring alone
+STAGE_NETS = "nets"         # symbols (kept where they are) plus wiring
+STAGE_ALL = "all"           # both, in one pass
 
 # Above this many pins a net is labelled at each pin instead of being drawn as wires.
 # This is how schematics are drawn by hand: nobody routes a 56-pin ground net as a
@@ -45,11 +54,16 @@ class ConversionResult(object):
         self.blocked = False         # stopped because the board is not fully tagged
         self.auto_tagged_nets = []
         self.auto_tagged_components = []
+        self.stage = STAGE_ALL
 
     def summary(self):
         if self.blocked:
             return "blocked: the board is not fully tagged"
-        parts = ["%d symbols" % len(self.symbols), "%d nets" % len(self.nets)]
+        parts = ["%d symbols" % len(self.symbols)]
+        if self.stage == STAGE_SYMBOLS:
+            parts.append("wiring skipped (symbols-only run)")
+        else:
+            parts.append("%d nets" % len(self.nets))
         if self.auto_tagged_components:
             parts.append("%d reference(s) auto-tagged" % len(self.auto_tagged_components))
         if self.auto_tagged_nets:
@@ -230,7 +244,8 @@ def _pinned_positions(doc, sync_state):
 
 def convert(board, project_name="", project_dir=None, resolver=None,
             index=None, loader=None, progress=None,
-            existing=None, sync_state=None, tag_policy=preflight.REQUIRE):
+            existing=None, sync_state=None, tag_policy=preflight.REQUIRE,
+            stage=STAGE_ALL):
     """Convert *board* into a :class:`ConversionResult`.
 
     Passing *existing* (a :class:`~core.schematic.Schematic`) and *sync_state* turns
@@ -240,6 +255,8 @@ def convert(board, project_name="", project_dir=None, resolver=None,
     """
     resolver = resolver or default_resolver
     result = ConversionResult()
+    result.stage = stage
+    wire_it_up = stage != STAGE_SYMBOLS
 
     def step(msg):
         if progress:
@@ -350,7 +367,8 @@ def convert(board, project_name="", project_dir=None, resolver=None,
         doc = existing
         # Strip only what we generated last time. Items the user added carry UUIDs we
         # never recorded, so they are invisible to this and survive the update.
-        for uuid in list(sync_state.routing) if sync_state else []:
+        # A symbols-only run must not tear out wiring it is not going to replace.
+        for uuid in (list(sync_state.routing) if (sync_state and wire_it_up) else []):
             doc.remove_by_uuid(uuid)
         for uuid in sorted(sync_state.owned_symbol_uuids()) if sync_state else []:
             doc.remove_by_uuid(uuid)
@@ -414,6 +432,11 @@ def convert(board, project_name="", project_dir=None, resolver=None,
                 pin.y + reach * math.sin(rad),
                 p.pos, p.rotation, p.mirror_x, p.mirror_y,
             )
+
+    if not wire_it_up:
+        step("Symbols placed; wiring skipped")
+        result.schematic = doc
+        return result
 
     # -- 8. routing ---------------------------------------------------------
     step("Routing nets")

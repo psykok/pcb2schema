@@ -88,10 +88,15 @@ class SyncState(object):
 
     # -- updates ------------------------------------------------------------
 
-    def record_component(self, fp_uuid, lib_id, units):
-        """*units* maps unit number to the symbol UUID placed for it."""
+    def record_component(self, fp_uuid, lib_id, units, reference=""):
+        """*units* maps unit number to the symbol UUID placed for it.
+
+        The reference is stored purely so a part that later disappears from the board
+        can be named in the report -- a bare UUID tells the user nothing.
+        """
         self.components[fp_uuid] = {
             "symbol": lib_id,
+            "reference": reference,
             "units": {str(k): v for k, v in units.items()},
         }
 
