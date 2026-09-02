@@ -51,6 +51,31 @@ def _property(key, value, at, hidden=False, justify=None):
     ])
 
 
+def _carry_over_field_positions(old, new):
+    """Keep where the user dragged a symbol's reference and value text.
+
+    Only when the symbol itself has not moved. If it has, the old absolute text
+    positions belong to the old location and would leave the captions stranded
+    behind, so the freshly computed ones are used instead.
+    """
+    old_at, new_at = old.node("at"), new.node("at")
+    if old_at is None or new_at is None:
+        return
+    if [str(a) for a in old_at.atoms()] != [str(a) for a in new_at.atoms()]:
+        return
+
+    kept = {}
+    for prop in old.nodes("property"):
+        atoms = prop.atoms()
+        at = prop.node("at")
+        if len(atoms) >= 1 and at is not None:
+            kept[atoms[0]] = at
+    for prop in new.nodes("property"):
+        atoms = prop.atoms()
+        if atoms and atoms[0] in kept:
+            prop.replace(prop.node("at"), kept[atoms[0]])
+
+
 class Schematic(object):
     """A schematic document under construction, or one being edited in place."""
 
@@ -142,7 +167,8 @@ class Schematic(object):
             Node("at", [num(x), num(y), num(rotation)]),
         ])
         if mirror_x or mirror_y:
-            node.append(Node("mirror", [Sym("x" if mirror_x else "y")]))
+            axes = [Sym(a) for a, on in (("x", mirror_x), ("y", mirror_y)) if on]
+            node.append(Node("mirror", axes))
         node.extend([
             Node("unit", [Sym(str(unit))]),
             Node("exclude_from_sim", [Sym("no")]),
@@ -302,6 +328,7 @@ class Schematic(object):
         if uuid:
             for i, child in enumerate(self.root.children):
                 if isinstance(child, Node) and child.value("uuid") == uuid:
+                    _carry_over_field_positions(child, node)
                     self.root.children[i] = node
                     return node
         self._insert_before_tail(node)

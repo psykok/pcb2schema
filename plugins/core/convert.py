@@ -421,6 +421,13 @@ def convert(board, project_name="", project_dir=None, resolver=None,
                 footprint=info.lib_id,
                 pos=p.pos,
                 unit=p.unit,
+                # Orientation has to be written out, not just used for the maths.
+                # Pin positions are computed from these, so emitting the symbol
+                # unrotated while routing to its rotated pins puts every wire on
+                # this part in the wrong place.
+                rotation=p.rotation,
+                mirror_x=p.mirror_x,
+                mirror_y=p.mirror_y,
                 uuid=schematic.derive_uuid("symbol", info.uuid, p.unit),
                 description=symdef.name,
                 # Pins common to every unit belong on exactly one instance.

@@ -48,6 +48,42 @@ def _wires(sch):
     return sorted(out)
 
 
+def _orient(sch, reference, pos=None, rotation=None, mirror=None):
+    """Move / rotate / mirror a symbol, as dragging it in eeschema would."""
+    root = sexpr.load(sch)
+    for sym in root.nodes("symbol"):
+        ref = [p.atoms()[1] for p in sym.nodes("property")
+               if p.atoms() and p.atoms()[0] == "Reference"][0]
+        if ref != reference:
+            continue
+        at = sym.node("at").atoms()
+        x = pos[0] if pos else float(str(at[0]))
+        y = pos[1] if pos else float(str(at[1]))
+        r = rotation if rotation is not None else float(str(at[2]))
+        sym.node("at").children = [sexpr.num(x), sexpr.num(y), sexpr.num(r)]
+        old = sym.node("mirror")
+        if old is not None:
+            sym.remove(old)
+        if mirror:
+            sym.append(sexpr.Node("mirror", [sexpr.Sym(a) for a in mirror]))
+    sexpr.save(root, sch)
+
+
+def _orientation_of(sch, reference):
+    root = sexpr.load(sch)
+    for sym in root.nodes("symbol"):
+        ref = [p.atoms()[1] for p in sym.nodes("property")
+               if p.atoms() and p.atoms()[0] == "Reference"][0]
+        if ref != reference:
+            continue
+        at = sym.node("at").atoms()
+        m = sym.node("mirror")
+        return ((round(float(str(at[0])), 3), round(float(str(at[1])), 3)),
+                round(float(str(at[2])), 3),
+                tuple(str(a) for a in m.atoms()) if m else ())
+    raise AssertionError("no symbol %s" % reference)
+
+
 def _move_symbol(sch, reference, dx, dy):
     root = sexpr.load(sch)
     for sym in root.nodes("symbol"):
@@ -194,3 +230,90 @@ def test_state_records_wiring_per_net():
         # The flat ownership set must stay consistent with the per-net record.
         flat = {u for e in st.nets.values() for u in e["uuids"]}
         assert flat == st.routing
+
+
+def test_rotation_and_mirror_survive_a_rerun():
+    """Position was preserved but orientation was not, which is worse than it sounds.
+
+    Pin positions are computed from the orientation. Writing the symbol unrotated
+    while routing to its rotated pins puts every wire on that part in the wrong
+    place -- so this is a correctness bug, not just a cosmetic one.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        pcb = _project(tmp)
+        sch = _run(pcb).sch_path
+
+        wanted = ((203.2, 50.8), 90.0, ("y",))
+        _orient(sch, "J1", pos=wanted[0], rotation=wanted[1], mirror=wanted[2])
+
+        _run(pcb)
+        assert _orientation_of(sch, "J1") == wanted, (
+            "J1 came back as %s, expected %s"
+            % (_orientation_of(sch, "J1"), wanted))
+
+
+def test_wiring_is_correct_against_a_rotated_symbol():
+    """The netlist must still match once a part has been turned and mirrored."""
+    import subprocess
+    cli = "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
+    with tempfile.TemporaryDirectory() as tmp:
+        pcb = _project(tmp)
+        sch = _run(pcb).sch_path
+        _orient(sch, "J1", pos=(203.2, 50.8), rotation=90, mirror=("y",))
+        outcome = _run(pcb)
+
+        net_path = os.path.join(tmp, "out.net")
+        proc = subprocess.run(
+            [cli, "sch", "export", "netlist", "--format", "kicadsexpr",
+             "-o", net_path, sch], capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+        exported = {frozenset("%s.%s" % (n.value("ref"), n.value("pin"))
+                              for n in net.nodes("node"))
+                    for net in sexpr.load(net_path).node("nets").nodes("net")}
+        exported = {m for m in exported if len(m) >= 2}
+
+        placed = {ref for _i, _s, ref, _m in outcome.result.symbols}
+        expected = set()
+        for net in outcome.result.nets:
+            members = frozenset(
+                "%s.%s" % (outcome.result.reference_map[p.fp_uuid], p.number)
+                for p in net.pads
+                if outcome.result.reference_map.get(p.fp_uuid) in placed)
+            if len(members) >= 2:
+                expected.add(members)
+        assert exported == expected, "wiring does not reach a rotated symbol's pins"
+
+
+def test_repositioned_field_text_is_kept():
+    """Dragging a reference label aside should not be undone by a re-run."""
+    with tempfile.TemporaryDirectory() as tmp:
+        pcb = _project(tmp)
+        sch = _run(pcb).sch_path
+
+        root = sexpr.load(sch)
+        for sym in root.nodes("symbol"):
+            ref = [p.atoms()[1] for p in sym.nodes("property")
+                   if p.atoms() and p.atoms()[0] == "Reference"][0]
+            if ref != "J1":
+                continue
+            for prop in sym.nodes("property"):
+                if prop.atoms() and prop.atoms()[0] == "Reference":
+                    prop.node("at").children = [
+                        sexpr.num(11.11), sexpr.num(22.22), sexpr.num(0)]
+        sexpr.save(root, sch)
+
+        _run(pcb)
+
+        root = sexpr.load(sch)
+        found = None
+        for sym in root.nodes("symbol"):
+            ref = [p.atoms()[1] for p in sym.nodes("property")
+                   if p.atoms() and p.atoms()[0] == "Reference"][0]
+            if ref != "J1":
+                continue
+            for prop in sym.nodes("property"):
+                if prop.atoms() and prop.atoms()[0] == "Reference":
+                    a = prop.node("at").atoms()
+                    found = (round(float(str(a[0])), 2), round(float(str(a[1])), 2))
+        assert found == (11.11, 22.22), "the moved reference text was reset to %s" % (found,)
