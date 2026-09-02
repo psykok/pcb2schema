@@ -100,6 +100,10 @@ _TEXT_HEIGHT = 1.27 * 2.0
 _BODY_PAD = 2.0
 
 
+# v2: junction dots are now emitted at pins where a wire run was split.
+_SIGNATURE_VERSION = "v2"
+
+
 def _net_signature(name, pin_points):
     """What a net's wiring depends on: its name, its pins, and where they sit.
 
@@ -108,7 +112,10 @@ def _net_signature(name, pin_points):
     pin positions and so redraws exactly the nets that touch it, and nothing else.
     """
     parts = ["%s|%.2f|%.2f" % (key, pt[0], pt[1]) for key, pt in sorted(pin_points)]
-    return "%s::%s" % (name, ";".join(parts))
+    # The leading version is deliberate: bump it whenever a change makes previously
+    # generated wiring wrong, so existing sheets are redrawn once instead of keeping
+    # it forever on the grounds that the net itself did not change.
+    return "%s::%s::%s" % (_SIGNATURE_VERSION, name, ";".join(parts))
 
 
 def _label_obstacles(placeables, result):

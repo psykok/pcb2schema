@@ -343,12 +343,21 @@ class Router(object):
 
     @staticmethod
     def _junctions(edges, pin_cells):
-        """Cells where three or more wire ends meet need an explicit junction dot."""
+        """Cells where three or more connectable things meet need a junction dot.
+
+        A pin counts as one of them. That matters because runs are deliberately split
+        at pins (see :meth:`_merge`), so a pin partway along a net has two wire ends
+        plus the pin meeting at it -- three things, and therefore a dot. Counting only
+        wire ends scores that as two and silently leaves the dot out, which is both
+        wrong by KiCad's convention and visibly odd on the sheet.
+        """
         degree = {}
         for a, b in edges:
             degree[a] = degree.get(a, 0) + 1
             degree[b] = degree.get(b, 0) + 1
-        return {c for c, d in degree.items() if d >= 3}
+        pins = set(pin_cells)
+        return {c for c, d in degree.items()
+                if d >= 3 or (d >= 2 and c in pins)}
 
 
 def _split(start, end, cuts):
